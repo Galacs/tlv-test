@@ -1,168 +1,153 @@
 #include <Arduino.h>
 
+// SPDX-FileCopyrightText: 2016 Sandeep Mistry
+// SPDX-FileCopyrightText: 2022 Earle F. Philhower, III
+// SPDX-FileCopyrightText: 2023 Ladyada for Adafruit Industries
+//
+// SPDX-License-Identifier: MIT
+
 #include <Adafruit_TLV320DAC3100.h>
+#include <ESP_I2S.h>
+#include <math.h>
 
-Adafruit_TLV320DAC3100 codec; // Create codec object
-#define TLV_RESET 16
+Adafruit_TLV320DAC3100 codec;  // Create codec object
 
-void halt(const char *message) {
-  Serial.println(message);
-  while (1)
-    yield(); // Function to halt on critical errors
-}
+#define pBCLK  10   // BITCLOCK - I2S clock
+#define pWS    1  // LRCLOCK - Word select
+#define pDOUT  13  // DATA - I2S data
+#define pRESET 16   // RST - hardware reset (required for Pico 2W / RP2350)
+
+// Create I2S port
+I2S i2s(OUTPUT);
+
+const int frequency = 440; // frequency of square wave in Hz
+const int amplitude = 500; // amplitude of square wave
+const int sampleRate = 16000; // 16 KHz is a good quality
+
+const int halfWavelength = (sampleRate / frequency); // half wavelength of square wave
+
+int16_t sample = amplitude; // current sample value
+int count = 0;
 
 void setup() {
   Serial.begin(115200);
   Wire.setPins(8, 7);
+  
+  while (!Serial) delay(10);
+  Serial.println("\n\nTLV320DAC3100 Sine Tone Test");
 
-  pinMode(TLV_RESET, OUTPUT);
-  digitalWrite(TLV_RESET, LOW);
+  // Hardware reset - required for Pico 2W (RP2350), harmless on Pico (RP2040)
+  pinMode(pRESET, OUTPUT);
+  digitalWrite(pRESET, LOW);
   delay(100);
-  digitalWrite(TLV_RESET, HIGH);
+  digitalWrite(pRESET, HIGH);
+  delay(100);
 
-  Serial.println("Init TLV DAC");
+  // Start I2C communication with codec
+  Serial.println("Initializing codec...");
   if (!codec.begin()) {
-    halt("Failed to initialize codec!");
+    Serial.println("Failed to initialize codec!");
   }
-  delay(10);
-
-  // Interface Control
-  if (!codec.setCodecInterface(TLV320DAC3100_FORMAT_I2S,     // Format: I2S
-                               TLV320DAC3100_DATA_LEN_16)) { // Length: 16 bits
-    halt("Failed to configure codec interface!");
+  codec.reset();
+  // Step 1: Set codec interface to I2S with 16-bit data
+  Serial.println("Configuring codec interface...");
+  if (!codec.setCodecInterface(TLV320DAC3100_FORMAT_I2S, TLV320DAC3100_DATA_LEN_16)) {
+    Serial.println("Failed to configure codec interface!");
   }
-
-  // Clock MUX and PLL settings
+  
+  // Step 2: Configure clock - using PLL with BCLK as input
+  Serial.println("Configuring codec clocks...");
   if (!codec.setCodecClockInput(TLV320DAC3100_CODEC_CLKIN_PLL) ||
       !codec.setPLLClockInput(TLV320DAC3100_PLL_CLKIN_BCLK)) {
-    halt("Failed to configure codec clocks!");
+    Serial.println("Failed to configure codec clocks!");
   }
-
-  if (!codec.setPLLValues(1, 2, 32, 0)) { // P=2, R=2, J=32, D=0
-    halt("Failed to configure PLL values!");
+  
+  // Step 3: Set up PLL - these values work well for 44.1kHz sample rate
+  if (!codec.setPLLValues(1, 1, 8, 0)) {
+    Serial.println("Failed to configure PLL values!");
   }
-
-  // DAC/ADC Config
-  if (!codec.setNDAC(true, 8) || // Enable NDAC with value 8
-      !codec.setMDAC(true, 2)) { // Enable MDAC with value 2
-    halt("Failed to configure DAC dividers!");
+  
+  // Step 4: Configure DAC dividers
+  if (!codec.setNDAC(true, 8) ||
+      !codec.setMDAC(true, 2) ||
+      !codec.setDOSR(128)) {
+    Serial.println("Failed to configure DAC dividers!");
   }
-
-  if (!codec.powerPLL(true)) { // Power up the PLL
-    halt("Failed to power up PLL!");
+  
+  // Step 5: Power up PLL
+  if (!codec.powerPLL(true)) {
+    Serial.println("Failed to power up PLL!");
   }
-
-  // DAC Setup
-  if (!codec.setDACDataPath(true, true,                    // Power up both DACs
-                            TLV320_DAC_PATH_NORMAL,        // Normal left path
-                            TLV320_DAC_PATH_NORMAL,        // Normal right path
-                            TLV320_VOLUME_STEP_1SAMPLE)) { // Step: 1 per sample
-    halt("Failed to configure DAC data path!");
+  
+  // Step 6: Configure DAC path - power up both left and right DACs
+  Serial.println("Configuring DAC path...");
+  if (!codec.setDACDataPath(true, true, 
+                           TLV320_DAC_PATH_NORMAL,
+                           TLV320_DAC_PATH_NORMAL,
+                           TLV320_VOLUME_STEP_1SAMPLE)) {
+    Serial.println("Failed to configure DAC data path!");
   }
-
+  
+  // Step 7: Route DAC output to headphone
   if (!codec.configureAnalogInputs(TLV320_DAC_ROUTE_MIXER, // Left DAC to mixer
                                    TLV320_DAC_ROUTE_MIXER, // Right DAC to mixer
                                    false, false, false,    // No AIN routing
                                    false)) {               // No HPL->HPR
-    halt("Failed to configure DAC routing!");
+    Serial.println("Failed to configure DAC routing!");
   }
-
-  // DAC Volume Control
+  
+  // Step 8: Unmute DAC and set volume (higher for testing)
+  Serial.println("Setting DAC volume...");
   if (!codec.setDACVolumeControl(
           false, false, TLV320_VOL_INDEPENDENT) || // Unmute both channels
       !codec.setChannelVolume(false, 18) ||        // Left DAC +0dB
       !codec.setChannelVolume(true, 18)) {         // Right DAC +0dB
-    halt("Failed to configure DAC volumes!");
+    Serial.println("Failed to configure DAC volume control!");
   }
 
-  // Headphone and Speaker Setup
-  if (!codec.configureHeadphoneDriver(
-          true, true,                     // Power up both drivers
-          TLV320_HP_COMMON_1_35V,         // Default common mode
-          false) ||                       // Don't power down on SCD
-      !codec.configureHPL_PGA(0, true) || // Set HPL gain, unmute
-      !codec.configureHPR_PGA(0, true) || // Set HPR gain, unmute
-      !codec.setHPLVolume(true, 6) ||     // Enable and set HPL volume
-      !codec.setHPRVolume(true, 6)) {     // Enable and set HPR volume
-    halt("Failed to configure headphone outputs!");
-  }
 
+  if (!codec.setChannelVolume(false, 12.0) ||
+      !codec.setChannelVolume(true, 12.0)) {
+    Serial.println("Failed to set DAC channel volumes!");
+  }
+  
   if (!codec.enableSpeaker(true) ||                // Dis/Enable speaker amp
       !codec.configureSPK_PGA(TLV320_SPK_GAIN_6DB, // Set gain to 6dB
                               true) ||             // Unmute
       !codec.setSPKVolume(true, 0)) { // Enable and set volume to 0dB
-    halt("Failed to configure speaker output!");
+    Serial.println("Failed to configure speaker output!");
   }
 
-  if (!codec.configMicBias(false, true, TLV320_MICBIAS_AVDD) ||
-      !codec.setHeadsetDetect(true) ||
-      !codec.setInt1Source(true, true, false, false, false,
-                           false) || // GPIO1 is detect headset or button press
-      !codec.setGPIO1Mode(TLV320_GPIO1_INT1)) {
-    halt("Failed to configure headset detect");
+  // Headphone output
+  codec.configureHeadphoneDriver(true, true, TLV320_HP_COMMON_1_35V, false);
+  codec.setHPLVolume(true, 0);
+  codec.setHPRVolume(true, 0);
+  codec.configureHPL_PGA(9, true);
+  codec.configureHPR_PGA(9, true);
+
+  // Initialize I2S peripheral
+  Serial.println("Initializing I2S...");
+  i2s.setBCLK(pBCLK);
+  i2s.setDATA(pDOUT);
+  i2s.setBitsPerSample(16);
+  
+  // Start I2S at the sample rate
+  if (!i2s.begin(sampleRate)) {
+    Serial.println("Failed to initialize I2S!");
   }
-  Serial.println("TLV config done!");
+
 }
 
 void loop() {
-  static tlv320_headset_status_t last_status = TLV320_HEADSET_NONE;
-
-  tlv320_headset_status_t status = codec.getHeadsetStatus();
-
-  if (last_status != status) {
-    switch (status) {
-    case TLV320_HEADSET_NONE:
-      Serial.println("Headset removed");
-      break;
-    case TLV320_HEADSET_WITHOUT_MIC:
-      Serial.println("Headphones detected");
-      break;
-    case TLV320_HEADSET_WITH_MIC:
-      Serial.println("Headset with mic detected");
-      break;
-    }
-    last_status = status;
+  if (count % halfWavelength == 0) {
+    // invert the sample every half wavelength count multiple to generate square wave
+    sample = -1 * sample;
   }
 
-  // Read the sticky IRQ flags
-  uint8_t flags = codec.readIRQflags(true);
+  // write the same sample twice, once for left and once for the right channel
+  i2s.write(sample);
+  i2s.write(sample);
 
-  // Only print if there are flags set
-  if (flags) {
-    Serial.println(F("IRQ Flags detected:"));
-
-    if (flags & TLV320DAC3100_IRQ_HPL_SHORT) {
-      Serial.println(
-          F("- Short circuit detected at HPL / left class-D driver"));
-    }
-
-    if (flags & TLV320DAC3100_IRQ_HPR_SHORT) {
-      Serial.println(
-          F("- Short circuit detected at HPR / right class-D driver"));
-    }
-
-    if (flags & TLV320DAC3100_IRQ_BUTTON_PRESS) {
-      Serial.println(F("- Headset button pressed"));
-    }
-
-    if (flags & TLV320DAC3100_IRQ_HEADSET_DETECT) {
-      Serial.println(F("- Headset insertion detected"));
-    } else if (flags & 0x10) { // Check bit but with different meaning
-      Serial.println(F("- Headset removal detected"));
-    }
-
-    if (flags & TLV320DAC3100_IRQ_LEFT_DRC) {
-      Serial.println(F("- Left DAC signal power greater than DRC threshold"));
-    }
-
-    if (flags & TLV320DAC3100_IRQ_RIGHT_DRC) {
-      Serial.println(F("- Right DAC signal power greater than DRC threshold"));
-    }
-
-    Serial.print(F("Raw flag value: 0x"));
-    Serial.println(flags, HEX);
-    Serial.println();
-  }
-
-  delay(100);
+  // increment the counter for the next sample
+  count++;
 }
