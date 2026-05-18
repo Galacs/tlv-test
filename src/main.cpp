@@ -1,6 +1,5 @@
-#include "audioFile-32000fs-16bit.h" // mono audio file in flash
-#include "tlv320aic31xx_codec.h"
 #include <Arduino.h>
+#include "tlv320aic31xx_codec.h"
 // #include <ESP_I2S.h>
 #include "AudioTools.h"
 #include "AudioTools/AudioCodecs/CodecMP3Helix.h"
@@ -112,7 +111,8 @@ void setup(void) {
 
   // setup player
   // source.setFileFilter("*Bob Dylan*");
-  player.setMetadataCallback(printMetaData);
+  player.setBufferSize(1024);
+  // player.setMetadataCallback(printMetaData);
   player.begin();
   // I2S - init AFTER codec so BCLK is present for PLL
   // i2s.setPins(10, 11, 12);
@@ -125,6 +125,8 @@ void setup(void) {
   config.pin_bck = 10;
   config.pin_ws = 11;
   config.pin_data = 12;
+  config.buffer_size = 1024;   // add this
+  config.buffer_count = 16;
   i2s.begin(config);
 
   // Setup sine wave
