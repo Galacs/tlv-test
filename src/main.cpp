@@ -1,33 +1,40 @@
 #include <Arduino.h>
 #include "audioFile-32000fs-16bit.h" // mono audio file in flash
 #include "tlv320aic31xx_codec.h"
-#include <ESP_I2S.h>
+// #include <ESP_I2S.h>
 #include <Wire.h>
+#include "AudioTools.h"
 
 // ESP32-S3 I2S bus settings
-i2s_mode_t mode = I2S_MODE_STD; // Philips standard
-i2s_data_bit_width_t width =
-    I2S_DATA_BIT_WIDTH_16BIT;                // 16bit data/sample width
-i2s_slot_mode_t slot = I2S_SLOT_MODE_STEREO; // 2 slots (stereo)
-I2SClass i2s;
+// i2s_mode_t mode = I2S_MODE_STD; // Philips standard
+// i2s_data_bit_width_t width =
+//     I2S_DATA_BIT_WIDTH_16BIT;                // 16bit data/sample width
+// i2s_slot_mode_t slot = I2S_SLOT_MODE_STEREO; // 2 slots (stereo)
+// I2SClass i2s;
+
+AudioInfo info(44100, 2, 16);
+SineGenerator<int16_t> sineWave(32000);                // subclass of SoundGenerator with max amplitude of 32000
+GeneratedSoundStream<int16_t> sound(sineWave);             // Stream generated from sine wave
+I2SStream out; 
+StreamCopy copier(out, sound);  
 
 // background task continuously feeding DAC with audio data
-void backgroundTask(void *parameter) {
-  digitalWrite(LED_BUILTIN, HIGH); // status LED On
-  while (true) {
-    for (uint32_t i = 0; i < sizeof(audioFile); i += 2) {
-      uint8_t sample_low8bit = audioFile[i],
-              sample_high8bit = audioFile[i + 1];
-      // left channel, low 8 bits first
-      i2s.write(sample_low8bit);
-      i2s.write(sample_high8bit);
-      // right channel, low 8 bits first
-      i2s.write(sample_low8bit);
-      i2s.write(sample_high8bit);
-    }
-  }
-  vTaskDelete(NULL); // will never get here
-}
+// void backgroundTask(void *parameter) {
+//   digitalWrite(LED_BUILTIN, HIGH); // status LED On
+//   while (true) {
+//     for (uint32_t i = 0; i < sizeof(audioFile); i += 2) {
+//       uint8_t sample_low8bit = audioFile[i],
+//               sample_high8bit = audioFile[i + 1];
+//       // left channel, low 8 bits first
+//       i2s.write(sample_low8bit);
+//       i2s.write(sample_high8bit);
+//       // right channel, low 8 bits first
+//       i2s.write(sample_low8bit);
+//       i2s.write(sample_high8bit);
+//     }
+//   }
+//   vTaskDelete(NULL); // will never get here
+// }
 
 void halt(const char *message) {
   Serial.println(message);
@@ -41,6 +48,7 @@ TLV320AIC31xx codec(&Wire);
 void setup(void) {
   // Open Serial
   Serial.begin(115200);
+  AudioToolsLogger.begin(Serial, AudioToolsLogLevel::Info);
   Wire.setPins(8, 7);
   Wire.begin();
 
@@ -87,14 +95,25 @@ void setup(void) {
   codec.setSpeakerVolume(0.0f);
 
   // I2S - init AFTER codec so BCLK is present for PLL
-  i2s.setPins(10, 11, 12);
-  i2s.begin(mode, (uint32_t)SAMPLERATE_HZ, width, slot);
+  // i2s.setPins(10, 11, 12);
+  // i2s.begin(mode, (uint32_t)SAMPLERATE_HZ, width, slot);
   delay(50);  // let PLL lock to BCLK
-  xTaskCreate(backgroundTask, "bgTask", 4096, NULL, 1, NULL);
+  // xTaskCreate(backgroundTask, "bgTask", 4096, NULL, 1, NULL);
+    Serial.println("starting I2S...");
+  auto config = out.defaultConfig(TX_MODE);
+  config.copyFrom(info); 
+  // Custom I2S output pins
+  config.pin_bck = 10;
+  config.pin_ws = 11;
+  config.pin_data = 12;
+  out.begin(config);
+
+  // Setup sine wave
+  sineWave.begin(info, N_B4);
+  Serial.println("started...");
 }
 
 void loop() {
-  sleep(1);
-  Serial.print("HS Detect: ");
-  Serial.println(codec.isHeadsetDetected());
+  copier.copy();
 }
+
