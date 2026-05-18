@@ -84,7 +84,7 @@ void setup(void) {
   // Headphone output
   codec.enableHeadphoneAmp();
   codec.setHeadphoneMute(false);
-  codec.setHeadphoneVolume(0.0f, 0.0f);  // 0dB
+  codec.setHeadphoneVolume(-50.0f, -50.0f);  // 0dB
   codec.setHeadphoneGain(0.0f, 0.0f);
   codec.setHeadphoneLineMode(true);
 
