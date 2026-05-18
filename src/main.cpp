@@ -4,19 +4,18 @@
 // #include <ESP_I2S.h>
 #include <Wire.h>
 #include "AudioTools.h"
+#include "AudioTools/Disk/AudioSourceSD.h"
+#include "AudioTools/AudioCodecs/CodecMP3Helix.h"
+#include <SPI.h>
 
-// ESP32-S3 I2S bus settings
-// i2s_mode_t mode = I2S_MODE_STD; // Philips standard
-// i2s_data_bit_width_t width =
-//     I2S_DATA_BIT_WIDTH_16BIT;                // 16bit data/sample width
-// i2s_slot_mode_t slot = I2S_SLOT_MODE_STEREO; // 2 slots (stereo)
-// I2SClass i2s;
+SPIClass *hspi = NULL;
 
-AudioInfo info(44100, 2, 16);
-SineGenerator<int16_t> sineWave(32000);                // subclass of SoundGenerator with max amplitude of 32000
-GeneratedSoundStream<int16_t> sound(sineWave);             // Stream generated from sine wave
-I2SStream out; 
-StreamCopy copier(out, sound);  
+const char *startFilePath="/";
+const char* ext="mp3";
+AudioSourceSD source(startFilePath, ext, 36, hspi);
+MP3DecoderHelix decoder;
+I2SStream i2s;
+AudioPlayer player(source, i2s, decoder);
 
 // background task continuously feeding DAC with audio data
 // void backgroundTask(void *parameter) {
@@ -44,6 +43,13 @@ void halt(const char *message) {
 
 TLV320AIC31xx codec(&Wire);
 
+void printMetaData(MetaDataType type, const char* str, int len){
+  Serial.print("==> ");
+  Serial.print(toStr(type));
+  Serial.print(": ");
+  Serial.println(str);
+}
+
 // Arduino Setup
 void setup(void) {
   // Open Serial
@@ -52,7 +58,17 @@ void setup(void) {
   Wire.setPins(8, 7);
   Wire.begin();
 
-  pinMode(9, INPUT_PULLDOWN);
+  hspi = new SPIClass(HSPI);
+  hspi->begin(34, 33, 35);
+  if (!SD.begin(36, *hspi, 4000000)) {  // try 4MHz first
+      Serial.println("SD init failed!");
+      // print hspi->pin details here
+  } else {
+      Serial.println("SD OK");
+  }
+  // delay(1000000);
+
+  // pinMode(9, INPUT_PULLDOWN);
 
   // Reset
   pinMode(16, OUTPUT);
@@ -84,7 +100,7 @@ void setup(void) {
   // Headphone output
   codec.enableHeadphoneAmp();
   codec.setHeadphoneMute(false);
-  codec.setHeadphoneVolume(-50.0f, -50.0f);  // 0dB
+  codec.setHeadphoneVolume(-35.0f, -35.0f);  // 0dB
   codec.setHeadphoneGain(0.0f, 0.0f);
   codec.setHeadphoneLineMode(true);
 
@@ -100,20 +116,24 @@ void setup(void) {
   delay(50);  // let PLL lock to BCLK
   // xTaskCreate(backgroundTask, "bgTask", 4096, NULL, 1, NULL);
     Serial.println("starting I2S...");
-  auto config = out.defaultConfig(TX_MODE);
-  config.copyFrom(info); 
+  auto config = i2s.defaultConfig(TX_MODE);
   // Custom I2S output pins
   config.pin_bck = 10;
   config.pin_ws = 11;
   config.pin_data = 12;
-  out.begin(config);
+  i2s.begin(config);
+
+  // setup player
+  //source.setFileFilter("*Bob Dylan*");
+  player.setMetadataCallback(printMetaData);
+  player.begin();
 
   // Setup sine wave
-  sineWave.begin(info, N_B4);
   Serial.println("started...");
 }
 
 void loop() {
-  copier.copy();
+  player.copy();
+  delay(1);
 }
 
