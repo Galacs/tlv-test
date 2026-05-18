@@ -1,108 +1,172 @@
 #include <Arduino.h>
+#include "audioFile-32000fs-16bit.h" // mono audio file in flash
+#include "tlv320aic31xx_codec.h"
 #include <ESP_I2S.h>
-#include "TLV320DAC3101.h"
-#include "audioFile-32000fs-16bit.h"       // mono audio file in flash
+#include <Wire.h>
 
 // ESP32-S3 I2S bus settings
-i2s_mode_t           mode  = I2S_MODE_STD;              // Philips standard
-i2s_data_bit_width_t width = I2S_DATA_BIT_WIDTH_16BIT;  // 16bit data/sample width
-i2s_slot_mode_t      slot  = I2S_SLOT_MODE_STEREO;      // 2 slots (stereo)
+i2s_mode_t mode = I2S_MODE_STD; // Philips standard
+i2s_data_bit_width_t width =
+    I2S_DATA_BIT_WIDTH_16BIT;                // 16bit data/sample width
+i2s_slot_mode_t slot = I2S_SLOT_MODE_STEREO; // 2 slots (stereo)
 I2SClass i2s;
-
-#define TLV_RESET 16
-
-TLV320DAC3101 dac;
-tlv320_init_config_t cfg;
-
-void halt(const char *message) {
-  Serial.println(message);
-  while (true) yield(); // Function to halt on critical errors
-}
 
 // background task continuously feeding DAC with audio data
 void backgroundTask(void *parameter) {
-  digitalWrite(LED_BUILTIN, HIGH); // status LED On
+  digitalWrite(LED_BUILTIN, HIGH);
+  int idx = 0;
   while (true) {
-    for (uint32_t i = 0; i < sizeof(audioFile); i += 2) {
-      uint8_t sample_low8bit = audioFile[i],
-              sample_high8bit = audioFile[i + 1];
-      // left channel, low 8 bits first
-      i2s.write(sample_low8bit);
-      i2s.write(sample_high8bit);
-      // right channel, low 8 bits first
-      i2s.write(sample_low8bit);
-      i2s.write(sample_high8bit);
-    }
+    float phase = (2.0f * M_PI * 440.0f * idx) / (float)SAMPLERATE_HZ;
+    int16_t sample = (int16_t)(32767.0f * sinf(phase));
+    idx++;
+    if (idx >= SAMPLERATE_HZ)
+      idx = 0;
+
+    uint8_t lo = sample & 0xFF;
+    uint8_t hi = (sample >> 8) & 0xFF;
+
+    i2s.write(lo);
+    i2s.write(hi); // left
+    i2s.write(lo);
+    i2s.write(hi); // right
   }
-  vTaskDelete(NULL); // will never get here
+  vTaskDelete(NULL);
 }
 
-void setup() {
-  pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN, LOW);  // status LED Off
+void halt(const char *message) {
+  Serial.println(message);
+  while (true)
+    yield(); // Function to halt on critical errors
+}
 
+TLV320AIC31xx codec(&Wire);
+
+// Arduino Setup
+void setup(void) {
+  // Open Serial
   Serial.begin(115200);
-  delay(100);
   Wire.setPins(8, 7);
-  Serial.println("\nrunning example \"Beep Generator\":");
+  Wire.begin();
 
-  // HW reset makes sure DAC chip is reset properly
-  pinMode(TLV_RESET, OUTPUT);
-  digitalWrite(TLV_RESET, LOW);    // resets the DAC chip
+  pinMode(9, INPUT_PULLDOWN);
+
+  // Reset
+  pinMode(16, OUTPUT);
+  digitalWrite(16, LOW);
   delay(10);
-  digitalWrite(TLV_RESET, HIGH);
+  digitalWrite(16, HIGH);
+  delay(100);
 
-  // TLV320DAC3101 Audio DAC initialization
-  cfg.sample_frequency = SAMPLERATE_HZ;  // Hz, must be set
-  cfg.dac_gain_left = 5.0;               // dB, defaults to 0dB when not set,
-  cfg.dac_gain_right = 5.0;              // allowed range: -63.5...+24.0 dB
+  codec.begin();
+  codec.setWordLength(AIC31XX_WORD_LEN_16BITS);
 
-  if (!dac.initDAC(&cfg)) {
-    halt(dac.getLastError().c_str());
-  }
+  // Clocks
+  codec.setCLKMUX(AIC31XX_PLL_CLKIN_BCLK, AIC31XX_CODEC_CLKIN_PLL);
+  codec.setPLL(1, 2, 48, 0);   // 98.304 MHz PLL output
+  codec.setPLLPower(true);
+  delay(15);                    // wait for PLL lock
 
-  // only processing block PRB_P25 (RC12) contains the Beep generator
-  if (!dac.setDACProcessingBlock(25)) {
-    halt("Failed to configure processing block!");
-  }
+  codec.setNDACVal(6);
+  codec.setNDACPower(true);
+  codec.setMDACVal(4);
+  codec.setMDACPower(true);
+  codec.setDOSRVal(128);        // critical - was missing!
 
-  // config Beep generator
-  if (!dac.configureBeepTone(1000.0, 100, SAMPLERATE_HZ) ||  // fBeep = 1000Hz, duration = 100ms
-      !dac.setBeepVolume(-15, -15)) {                        // beep volume L/R = -15dB
-    halt("Failed to configure beep settings!");
-  }
+  // DAC
+  codec.enableDAC();
+  codec.setDACMute(false);
+  codec.setDACVolume(0.0f, 0.0f);  // 0dB to start
 
-  // activate headphone output and set headphone volume
-  if (!dac.configHeadphoneOutput(true,              // enable headphone output
-                                 false,             // HP(L/R) output driver acts as headphone driver
-                                 90)) {             // set volume (allowed range: 0(quiet)...127(loud))
-    halt("Failed to configure headphone output!");
-  }
+  // Headphone output
+  codec.enableHeadphoneAmp();
+  codec.setHeadphoneMute(false);
+  codec.setHeadphoneVolume(0.0f, 0.0f);  // 0dB
+  codec.setHeadphoneGain(6.0f, 6.0f);
 
-  // activate speaker output and set speaker volume
-  if (!dac.configSpeakerOutput(true,              // enable speaker output
-                               115)) {            // set volume (allowed range: 0(quiet)...127(loud))
-    halt("Failed to configure speaker output!");
-  }
-  Serial.println("TLV320 DAC config done!");
+  // Speaker
+  codec.enableSpeakerAmp();
+  codec.setSpeakerMute(false);
+  codec.setSpeakerGain(12.0f);
+  codec.setSpeakerVolume(0.0f);
 
-  // I2S bus initialization
+  // I2S - init AFTER codec so BCLK is present for PLL
   i2s.setPins(10, 11, 13);
-  if (!i2s.begin(mode, (uint32_t)SAMPLERATE_HZ, width, slot)) {
-    halt("Failed to initialize I2S bus!");
-  }
-  Serial.println("I2S bus initialization done!");
+  i2s.begin(mode, (uint32_t)SAMPLERATE_HZ, width, slot);
+  delay(50);  // let PLL lock to BCLK
 
+// I2C scan
+Serial.println("Scanning I2C...");
+for (uint8_t addr = 1; addr < 127; addr++) {
+  Wire.beginTransmission(addr);
+  if (Wire.endTransmission() == 0) {
+    Serial.printf("Found device at 0x%02X\n", addr);
+  }
+}
+
+// Raw register dump - page 0
+Serial.println("\n--- Raw Register Dump ---");
+uint8_t addr = 0x18;
+
+Wire.beginTransmission(addr);
+Wire.write(0x00); Wire.write(0x00); // page 0
+Wire.endTransmission();
+
+Serial.println("-- Page 0 --");
+for (uint8_t r = 0; r <= 70; r++) {
+  Wire.beginTransmission(addr);
+  Wire.write(r);
+  Wire.endTransmission(false);
+  Wire.requestFrom(addr, (uint8_t)1);
+  Serial.printf("P0/R%-3d = 0x%02X\n", r, Wire.available() ? Wire.read() : 0xFF);
+}
+
+Wire.beginTransmission(addr);
+Wire.write(0x00); Wire.write(0x01); // page 1
+Wire.endTransmission();
+
+Serial.println("-- Page 1 --");
+for (uint8_t r = 0; r <= 40; r++) {
+  Wire.beginTransmission(addr);
+  Wire.write(r);
+  Wire.endTransmission(false);
+  Wire.requestFrom(addr, (uint8_t)1);
+  Serial.printf("P1/R%-3d = 0x%02X\n", r, Wire.available() ? Wire.read() : 0xFF);
+}
+
+uint8_t a = 0x18;
+
+auto wr = [&](uint8_t page, uint8_t reg, uint8_t val) {
+  Wire.beginTransmission(a);
+  Wire.write(0x00); Wire.write(page);
+  Wire.endTransmission();
+  Wire.beginTransmission(a);
+  Wire.write(reg); Wire.write(val);
+  Wire.endTransmission();
+};
+
+// Route LEFT and RIGHT DAC to mixer (0xCC = both DACs to mixer)
+wr(1, 35, 0xCC);
+
+// HPL analog volume - 0dB (from working beep dump: 0xA5)
+wr(1, 36, 0xA5);
+
+// HPR analog volume - 0dB
+wr(1, 37, 0xA5);
+
+// HPL driver - powered, signal mode (from working beep dump: 0xD4)
+wr(1, 31, 0xD4);
+
+// HPR driver
+wr(1, 32, 0xC6);
+
+// Speaker volume (from working dump: 0x8C)
+wr(1, 38, 0x8C);
+wr(1, 39, 0x8C);
   xTaskCreate(backgroundTask, "bgTask", 4096, NULL, 1, NULL);
-  delay(1000);
 }
 
 void loop() {
-  delay(random(250, 4000));
-  if (!dac.enableBeep(true)) {
-    halt("Failed to enable beep generator!");
-  }
-  else {
-    Serial.println("Beep !");
-  }
+  sleep(1);
+  Serial.print("HS Detect: ");
+  Serial.println(codec.isHeadsetDetected());
 }
