@@ -1,108 +1,84 @@
 #include <Arduino.h>
 #include <ESP_I2S.h>
 #include "TLV320DAC3101.h"
-#include "audioFile-32000fs-16bit.h"       // mono audio file in flash
+#include "audioFile_16000Hz_16bit_mono.h"   // audio file in flash
 
-// ESP32-S3 I2S bus settings
+// ESP32-S3 I2S settings
 i2s_mode_t           mode  = I2S_MODE_STD;              // Philips standard
 i2s_data_bit_width_t width = I2S_DATA_BIT_WIDTH_16BIT;  // 16bit data/sample width
 i2s_slot_mode_t      slot  = I2S_SLOT_MODE_STEREO;      // 2 slots (stereo)
 I2SClass i2s;
 
-#define TLV_RESET 16
-
 TLV320DAC3101 dac;
 tlv320_init_config_t cfg;
 
+#define pBCLK  10   // BITCLOCK - I2S clock
+#define pWS    1  // LRCLOCK - Word select
+#define pDOUT  13  // DATA - I2S data
+#define pRESET 16   // RST - hardware reset (required for Pico 2W / RP2350)
+
+// helper function to halt on critical errors
 void halt(const char *message) {
   Serial.println(message);
-  while (true) yield(); // Function to halt on critical errors
-}
-
-// background task continuously feeding DAC with audio data
-void backgroundTask(void *parameter) {
-  digitalWrite(LED_BUILTIN, HIGH); // status LED On
-  while (true) {
-    for (uint32_t i = 0; i < sizeof(audioFile); i += 2) {
-      uint8_t sample_low8bit = audioFile[i],
-              sample_high8bit = audioFile[i + 1];
-      // left channel, low 8 bits first
-      i2s.write(sample_low8bit);
-      i2s.write(sample_high8bit);
-      // right channel, low 8 bits first
-      i2s.write(sample_low8bit);
-      i2s.write(sample_high8bit);
-    }
-  }
-  vTaskDelete(NULL); // will never get here
+  while (true) yield();
 }
 
 void setup() {
-  pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN, LOW);  // status LED Off
-
   Serial.begin(115200);
-  delay(100);
   Wire.setPins(8, 7);
-  Serial.println("\nrunning example \"Beep Generator\":");
+  delay(100);
+
+  Serial.println("\nrunning example \"Play Audio From Flash\":");
 
   // HW reset makes sure DAC chip is reset properly
-  pinMode(TLV_RESET, OUTPUT);
-  digitalWrite(TLV_RESET, LOW);    // resets the DAC chip
+  pinMode(pRESET, OUTPUT);
+  digitalWrite(pRESET, LOW);
   delay(10);
-  digitalWrite(TLV_RESET, HIGH);
+  digitalWrite(pRESET, HIGH);
 
   // TLV320DAC3101 Audio DAC initialization
-  cfg.sample_frequency = SAMPLERATE_HZ;  // Hz, must be set
-  cfg.dac_gain_left = 5.0;               // dB, defaults to 0dB when not set,
-  cfg.dac_gain_right = 5.0;              // allowed range: -63.5...+24.0 dB
+  cfg.sample_frequency = SAMPLERATE_HZ;      // Hz, must be set
+  cfg.dac_gain_left = -15.0;                 // dB, defaults to 0dB when not set,
+  cfg.dac_gain_right = -15.0;                // allowed range: -63.5...+24.0 dB
 
   if (!dac.initDAC(&cfg)) {
     halt(dac.getLastError().c_str());
   }
 
-  // only processing block PRB_P25 (RC12) contains the Beep generator
-  if (!dac.setDACProcessingBlock(25)) {
+  if (!dac.setDACProcessingBlock(1)) {   // PRB_P1 – simple stereo pass‑through
     halt("Failed to configure processing block!");
   }
 
-  // config Beep generator
-  if (!dac.configureBeepTone(1000.0, 100, SAMPLERATE_HZ) ||  // fBeep = 1000Hz, duration = 100ms
-      !dac.setBeepVolume(-5, -5)) {                        // beep volume L/R = -15dB
-    halt("Failed to configure beep settings!");
-  }
-
   // activate headphone output and set headphone volume
-  if (!dac.configHeadphoneOutput(true,              // enable headphone output
+  if (!dac.configHeadphoneOutput(true,              // headphone output enabled
                                  false,             // HP(L/R) output driver acts as headphone driver
-                                 90)) {             // set volume (allowed range: 0(quiet)...127(loud))
+                                 80)) {             // set volume (allowed range: 0(quiet)...127(loud))
     halt("Failed to configure headphone output!");
   }
 
   // activate speaker output and set speaker volume
-  if (!dac.configSpeakerOutput(true,              // enable speaker output
-                               115)) {            // set volume (allowed range: 0(quiet)...127(loud))
+  if (!dac.configSpeakerOutput(true,              // speaker output enabled
+                               100)) {            // set volume (allowed range: 0(quiet)...127(loud))
     halt("Failed to configure speaker output!");
   }
   Serial.println("TLV320 DAC config done!");
 
-  // I2S bus initialization
+  // I2S initialization
   i2s.setPins(10, 11, 13);
   if (!i2s.begin(mode, (uint32_t)SAMPLERATE_HZ, width, slot)) {
-    halt("Failed to initialize I2S bus!");
+    halt("Failed to initialize I2S!");
   }
-  Serial.println("I2S bus initialization done!");
-
-  xTaskCreate(backgroundTask, "bgTask", 4096, NULL, 1, NULL);
-  delay(1000);
+  Serial.println("I2S initialization done!");
 }
 
 void loop() {
-  delay(random(250, 4000));
-  if (!dac.enableBeep(true)) {
-    halt("Failed to enable beep generator!");
+  for (uint32_t i = 0; i < sizeof(audioFile); i += 2) {
+    // left channel, low 8 bits first
+    i2s.write(audioFile[i]);
+    i2s.write(audioFile[i + 1]);
+    // right channel, low 8 bits first
+    i2s.write(audioFile[i]);
+    i2s.write(audioFile[i + 1]);
   }
-  else {
-    Serial.println("Beep !");
-  }
+  //vTaskDelay(1);
 }
