@@ -1,17 +1,17 @@
-#include <Arduino.h>
 #include "audioFile-32000fs-16bit.h" // mono audio file in flash
 #include "tlv320aic31xx_codec.h"
+#include <Arduino.h>
 // #include <ESP_I2S.h>
-#include <Wire.h>
 #include "AudioTools.h"
-#include "AudioTools/Disk/AudioSourceSD.h"
 #include "AudioTools/AudioCodecs/CodecMP3Helix.h"
+#include "AudioTools/Disk/AudioSourceSD.h"
 #include <SPI.h>
+#include <Wire.h>
 
 SPIClass *hspi = NULL;
 
-const char *startFilePath="/";
-const char* ext="mp3";
+const char *startFilePath = "/";
+const char *ext = "mp3";
 AudioSourceSD source(startFilePath, ext, 36, hspi);
 MP3DecoderHelix decoder;
 I2SStream i2s;
@@ -43,7 +43,7 @@ void halt(const char *message) {
 
 TLV320AIC31xx codec(&Wire);
 
-void printMetaData(MetaDataType type, const char* str, int len){
+void printMetaData(MetaDataType type, const char *str, int len) {
   Serial.print("==> ");
   Serial.print(toStr(type));
   Serial.print(": ");
@@ -60,11 +60,11 @@ void setup(void) {
 
   hspi = new SPIClass(HSPI);
   hspi->begin(34, 33, 35);
-  if (!SD.begin(36, *hspi, 4000000)) {  // try 4MHz first
-      Serial.println("SD init failed!");
-      // print hspi->pin details here
+  if (!SD.begin(36, *hspi, 4000000)) { // try 4MHz first
+    Serial.println("SD init failed!");
+    // print hspi->pin details here
   } else {
-      Serial.println("SD OK");
+    Serial.println("SD OK");
   }
   // delay(1000000);
 
@@ -82,25 +82,25 @@ void setup(void) {
 
   // Clocks
   codec.setCLKMUX(AIC31XX_PLL_CLKIN_BCLK, AIC31XX_CODEC_CLKIN_PLL);
-  codec.setPLL(1, 2, 48, 0);   // 98.304 MHz PLL output
+  codec.setPLL(1, 2, 48, 0); // 98.304 MHz PLL output
   codec.setPLLPower(true);
-  delay(15);                    // wait for PLL lock
+  delay(15); // wait for PLL lock
 
   codec.setNDACVal(6);
   codec.setNDACPower(true);
   codec.setMDACVal(4);
   codec.setMDACPower(true);
-  codec.setDOSRVal(128);        // critical - was missing!
+  codec.setDOSRVal(128); // critical - was missing!
 
   // DAC
   codec.enableDAC();
   codec.setDACMute(false);
-  codec.setDACVolume(0.0f, 0.0f);  // 0dB to start
+  codec.setDACVolume(0.0f, 0.0f); // 0dB to start
 
   // Headphone output
   codec.enableHeadphoneAmp();
   codec.setHeadphoneMute(false);
-  codec.setHeadphoneVolume(-35.0f, -35.0f);  // 0dB
+  codec.setHeadphoneVolume(-35.0f, -35.0f); // 0dB
   codec.setHeadphoneGain(0.0f, 0.0f);
   codec.setHeadphoneLineMode(true);
 
@@ -110,12 +110,16 @@ void setup(void) {
   codec.setSpeakerGain(0.0f);
   codec.setSpeakerVolume(0.0f);
 
+  // setup player
+  // source.setFileFilter("*Bob Dylan*");
+  player.setMetadataCallback(printMetaData);
+  player.begin();
   // I2S - init AFTER codec so BCLK is present for PLL
   // i2s.setPins(10, 11, 12);
   // i2s.begin(mode, (uint32_t)SAMPLERATE_HZ, width, slot);
-  delay(50);  // let PLL lock to BCLK
-  // xTaskCreate(backgroundTask, "bgTask", 4096, NULL, 1, NULL);
-    Serial.println("starting I2S...");
+  delay(50); // let PLL lock to BCLK
+             // xTaskCreate(backgroundTask, "bgTask", 4096, NULL, 1, NULL);
+  Serial.println("starting I2S...");
   auto config = i2s.defaultConfig(TX_MODE);
   // Custom I2S output pins
   config.pin_bck = 10;
@@ -123,17 +127,13 @@ void setup(void) {
   config.pin_data = 12;
   i2s.begin(config);
 
-  // setup player
-  //source.setFileFilter("*Bob Dylan*");
-  player.setMetadataCallback(printMetaData);
-  player.begin();
-
   // Setup sine wave
   Serial.println("started...");
 }
 
 void loop() {
-  player.copy();
+  if (i2s.availableForWrite() > 0) {
+    player.copy();
+  }
   delay(1);
 }
-
