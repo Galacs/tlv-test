@@ -13,24 +13,20 @@ I2SClass i2s;
 
 // background task continuously feeding DAC with audio data
 void backgroundTask(void *parameter) {
-  digitalWrite(LED_BUILTIN, HIGH);
-  int idx = 0;
+  digitalWrite(LED_BUILTIN, HIGH); // status LED On
   while (true) {
-    float phase = (2.0f * M_PI * 440.0f * idx) / (float)SAMPLERATE_HZ;
-    int16_t sample = (int16_t)(32767.0f * sinf(phase));
-    idx++;
-    if (idx >= SAMPLERATE_HZ)
-      idx = 0;
-
-    uint8_t lo = sample & 0xFF;
-    uint8_t hi = (sample >> 8) & 0xFF;
-
-    i2s.write(lo);
-    i2s.write(hi); // left
-    i2s.write(lo);
-    i2s.write(hi); // right
+    for (uint32_t i = 0; i < sizeof(audioFile); i += 2) {
+      uint8_t sample_low8bit = audioFile[i],
+              sample_high8bit = audioFile[i + 1];
+      // left channel, low 8 bits first
+      i2s.write(sample_low8bit);
+      i2s.write(sample_high8bit);
+      // right channel, low 8 bits first
+      i2s.write(sample_low8bit);
+      i2s.write(sample_high8bit);
+    }
   }
-  vTaskDelete(NULL);
+  vTaskDelete(NULL); // will never get here
 }
 
 void halt(const char *message) {
@@ -81,87 +77,19 @@ void setup(void) {
   codec.enableHeadphoneAmp();
   codec.setHeadphoneMute(false);
   codec.setHeadphoneVolume(0.0f, 0.0f);  // 0dB
-  codec.setHeadphoneGain(6.0f, 6.0f);
+  codec.setHeadphoneGain(0.0f, 0.0f);
+  codec.setHeadphoneLineMode(true);
 
   // Speaker
   codec.enableSpeakerAmp();
   codec.setSpeakerMute(false);
-  codec.setSpeakerGain(12.0f);
+  codec.setSpeakerGain(0.0f);
   codec.setSpeakerVolume(0.0f);
 
   // I2S - init AFTER codec so BCLK is present for PLL
-  i2s.setPins(10, 11, 13);
+  i2s.setPins(10, 11, 12);
   i2s.begin(mode, (uint32_t)SAMPLERATE_HZ, width, slot);
   delay(50);  // let PLL lock to BCLK
-
-// I2C scan
-Serial.println("Scanning I2C...");
-for (uint8_t addr = 1; addr < 127; addr++) {
-  Wire.beginTransmission(addr);
-  if (Wire.endTransmission() == 0) {
-    Serial.printf("Found device at 0x%02X\n", addr);
-  }
-}
-
-// Raw register dump - page 0
-Serial.println("\n--- Raw Register Dump ---");
-uint8_t addr = 0x18;
-
-Wire.beginTransmission(addr);
-Wire.write(0x00); Wire.write(0x00); // page 0
-Wire.endTransmission();
-
-Serial.println("-- Page 0 --");
-for (uint8_t r = 0; r <= 70; r++) {
-  Wire.beginTransmission(addr);
-  Wire.write(r);
-  Wire.endTransmission(false);
-  Wire.requestFrom(addr, (uint8_t)1);
-  Serial.printf("P0/R%-3d = 0x%02X\n", r, Wire.available() ? Wire.read() : 0xFF);
-}
-
-Wire.beginTransmission(addr);
-Wire.write(0x00); Wire.write(0x01); // page 1
-Wire.endTransmission();
-
-Serial.println("-- Page 1 --");
-for (uint8_t r = 0; r <= 40; r++) {
-  Wire.beginTransmission(addr);
-  Wire.write(r);
-  Wire.endTransmission(false);
-  Wire.requestFrom(addr, (uint8_t)1);
-  Serial.printf("P1/R%-3d = 0x%02X\n", r, Wire.available() ? Wire.read() : 0xFF);
-}
-
-uint8_t a = 0x18;
-
-auto wr = [&](uint8_t page, uint8_t reg, uint8_t val) {
-  Wire.beginTransmission(a);
-  Wire.write(0x00); Wire.write(page);
-  Wire.endTransmission();
-  Wire.beginTransmission(a);
-  Wire.write(reg); Wire.write(val);
-  Wire.endTransmission();
-};
-
-// Route LEFT and RIGHT DAC to mixer (0xCC = both DACs to mixer)
-wr(1, 35, 0xCC);
-
-// HPL analog volume - 0dB (from working beep dump: 0xA5)
-wr(1, 36, 0xA5);
-
-// HPR analog volume - 0dB
-wr(1, 37, 0xA5);
-
-// HPL driver - powered, signal mode (from working beep dump: 0xD4)
-wr(1, 31, 0xD4);
-
-// HPR driver
-wr(1, 32, 0xC6);
-
-// Speaker volume (from working dump: 0x8C)
-wr(1, 38, 0x8C);
-wr(1, 39, 0x8C);
   xTaskCreate(backgroundTask, "bgTask", 4096, NULL, 1, NULL);
 }
 
