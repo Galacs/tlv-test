@@ -68,7 +68,7 @@ void setup() {
 
   // config Beep generator
   if (!dac.configureBeepTone(1000.0, 100, SAMPLERATE_HZ) ||  // fBeep = 1000Hz, duration = 100ms
-      !dac.setBeepVolume(-15, -15)) {                        // beep volume L/R = -15dB
+      !dac.setBeepVolume(-5, -5)) {                        // beep volume L/R = -15dB
     halt("Failed to configure beep settings!");
   }
 
