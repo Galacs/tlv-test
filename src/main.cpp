@@ -157,4 +157,6 @@ void loop() {
     player.copy();
   }
   delay(1);
+  btn_a.loop();
+  btn_b.loop();
 }
