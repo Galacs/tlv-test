@@ -6,6 +6,10 @@
 #include "AudioTools/Disk/AudioSourceSD.h"
 #include <SPI.h>
 #include <Wire.h>
+#include <Button2.h>
+
+Button2 btn_a;
+Button2 btn_b;
 
 SPIClass *hspi = NULL;
 
@@ -49,6 +53,14 @@ void printMetaData(MetaDataType type, const char *str, int len) {
   Serial.println(str);
 }
 
+void next_song(Button2 &btn) {
+  player.next();
+}
+
+void prev_song(Button2 &btn) {
+  player.previous();
+}
+
 // Arduino Setup
 void setup(void) {
   // Open Serial
@@ -56,6 +68,12 @@ void setup(void) {
   AudioToolsLogger.begin(Serial, AudioToolsLogLevel::Info);
   Wire.setPins(8, 7);
   Wire.begin();
+
+  btn_a.begin(4);
+  btn_b.begin(3);
+
+  btn_a.setClickHandler(prev_song);
+  btn_b.setClickHandler(next_song);
 
   hspi = new SPIClass(HSPI);
   hspi->begin(34, 33, 35);
