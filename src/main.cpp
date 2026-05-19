@@ -1,3 +1,4 @@
+#define USE_UTF8_LONG_NAMES 1
 #include <Arduino.h>
 #include "tlv320aic31xx_codec.h"
 // #include <ESP_I2S.h>
