@@ -1,10 +1,10 @@
-#define USE_UTF8_LONG_NAMES 1
+// #define USE_UTF8_LONG_NAMES 1
 #include <Arduino.h>
 #include "tlv320aic31xx_codec.h"
 // #include <ESP_I2S.h>
 #include "AudioTools.h"
 #include "AudioTools/AudioCodecs/CodecMP3Helix.h"
-#include "AudioTools/Disk/AudioSourceSD.h"
+#include "AudioTools/Disk/AudioSourceSDFAT.h"
 #include <SPI.h>
 #include <Wire.h>
 #include <Button2.h>
@@ -16,7 +16,9 @@ SPIClass *hspi = NULL;
 
 const char *startFilePath = "/";
 const char *ext = "mp3";
-AudioSourceSD source(startFilePath, ext, 36, hspi);
+// AudioSourceSDFAT source(startFilePath, ext, 36, hspi);
+SdSpiConfig sdcfg(36, DEDICATED_SPI, SD_SCK_MHZ(20) , hspi);
+AudioSourceSDFAT source(startFilePath, ext, sdcfg);
 MP3DecoderHelix decoder;
 I2SStream i2s;
 AudioPlayer player(source, i2s, decoder);
@@ -66,7 +68,7 @@ void prev_song(Button2 &btn) {
 void setup(void) {
   // Open Serial
   Serial.begin(115200);
-  AudioToolsLogger.begin(Serial, AudioToolsLogLevel::Info);
+  AudioToolsLogger.begin(Serial, AudioToolsLogLevel::Warning);
   Wire.setPins(8, 7);
   Wire.begin();
 
@@ -78,12 +80,6 @@ void setup(void) {
 
   hspi = new SPIClass(HSPI);
   hspi->begin(34, 33, 35);
-  if (!SD.begin(36, *hspi, 4000000)) { // try 4MHz first
-    Serial.println("SD init failed!");
-    // print hspi->pin details here
-  } else {
-    Serial.println("SD OK");
-  }
   // delay(1000000);
 
   // pinMode(9, INPUT_PULLDOWN);
@@ -131,8 +127,8 @@ void setup(void) {
   // setup player
   // source.setFileFilter("*Bob Dylan*");
   player.setBufferSize(1024);
-  // player.setMetadataCallback(printMetaData);
   player.begin();
+  player.setMetadataCallback(printMetaData);
   // I2S - init AFTER codec so BCLK is present for PLL
   // i2s.setPins(10, 11, 12);
   // i2s.begin(mode, (uint32_t)SAMPLERATE_HZ, width, slot);
